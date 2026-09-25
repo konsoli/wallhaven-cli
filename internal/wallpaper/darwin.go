@@ -21,6 +21,7 @@
 package wallpaper
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -92,18 +93,15 @@ func setViaStore(store, absPath string) (Result, error) {
 	// AllSpacesAndDisplays is what the Wallpaper settings pane calls "Show on
 	// all spaces". SystemDefault is what a newly created Space inherits.
 	// Both have to carry the image for the choice to survive.
-	applied := 0
-	for _, key := range []string{"AllSpacesAndDisplays", "SystemDefault"} {
-		ok, err := applyImage(root, key, config)
-		if err != nil {
-			return Result{}, err
-		}
-		if ok {
-			applied++
-		}
+	//
+	// Keep the placement and fill colour from whichever entry still has
+	// them, so a rebuilt entry does not silently reset the user's choice.
+	options := existingOptionValues(root)
+	if err := applyImage(root, "AllSpacesAndDisplays", config, options); err != nil {
+		return Result{}, err
 	}
-	if applied == 0 {
-		return Result{}, fmt.Errorf("the wallpaper store has no recognisable desktop entry")
+	if err := applyImage(root, "SystemDefault", config, options); err != nil {
+		return Result{}, err
 	}
 
 	// Per-Space and per-display overrides take precedence over
@@ -143,10 +141,62 @@ func checkRoundTrip(root map[string]any) error {
 	if _, err := plist.Unmarshal(encoded, &again); err != nil {
 		return fmt.Errorf("the wallpaper store cannot be re-encoded safely: %w", err)
 	}
-	if !reflect.DeepEqual(root, again) {
-		return fmt.Errorf("the wallpaper store did not survive a round trip; refusing to rewrite it")
+	if !equivalent(root, again) {
+		return errors.New("the wallpaper store did not survive a round trip; refusing to rewrite it")
 	}
 	return nil
+}
+
+// dateTolerance is how far two timestamps may drift and still count as the
+// same instant.
+//
+// A binary plist stores dates as float64 seconds since 2001, so a timestamp
+// macOS wrote can come back a few nanoseconds off once it has been through
+// this encoder. That is a rounding artifact of the format, not a sign that
+// the file holds something this code cannot represent, which is the only
+// thing checkRoundTrip is trying to catch.
+const dateTolerance = time.Millisecond
+
+// equivalent reports whether two decoded property list trees carry the same
+// data, allowing for date rounding.
+func equivalent(a, b any) bool {
+	switch av := a.(type) {
+	case time.Time:
+		bv, ok := b.(time.Time)
+		if !ok {
+			return false
+		}
+		d := av.Sub(bv)
+		if d < 0 {
+			d = -d
+		}
+		return d < dateTolerance
+	case map[string]any:
+		bv, ok := b.(map[string]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for k, v := range av {
+			other, present := bv[k]
+			if !present || !equivalent(v, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		bv, ok := b.([]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if !equivalent(av[i], bv[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(a, b)
+	}
 }
 
 // imageConfiguration builds the nested binary plist macOS stores for an image
@@ -159,20 +209,58 @@ func imageConfiguration(absPath string) ([]byte, error) {
 	}, plist.BinaryFormat)
 }
 
-// applyImage points root[key].Desktop at the given image configuration.
-// It reports whether the entry existed and was updated.
-func applyImage(root map[string]any, key string, config []byte) (bool, error) {
+// existingOptionValues returns the encoded placement and fill-colour options
+// from whichever desktop entry still carries them.
+func existingOptionValues(root map[string]any) []byte {
+	for _, key := range []string{"AllSpacesAndDisplays", "SystemDefault"} {
+		section, ok := root[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		desktop, ok := section["Desktop"].(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := desktop["Content"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if v, ok := content["EncodedOptionValues"].([]byte); ok && len(v) > 0 {
+			return v
+		}
+	}
+	return nil
+}
+
+// applyImage points root[key].Desktop at the given image configuration,
+// creating the section or its desktop entry when macOS has removed them.
+//
+// Removal is not hypothetical: after the AppleScript path runs, macOS
+// rewrites AllSpacesAndDisplays with no Desktop entry at all and a Type of
+// "idle", which leaves only the screen saver choice behind. Skipping that
+// case would mean reporting an all-spaces success while only SystemDefault
+// actually carried the image.
+func applyImage(root map[string]any, key string, config, options []byte) error {
 	section, ok := root[key].(map[string]any)
 	if !ok {
-		return false, nil
+		section = map[string]any{}
+		root[key] = section
 	}
+	// "individual" is the mode that uses the Desktop entry.
+	section["Type"] = "individual"
+
 	desktop, ok := section["Desktop"].(map[string]any)
 	if !ok {
-		return false, nil
+		desktop = map[string]any{}
+		section["Desktop"] = desktop
 	}
 	content, ok := desktop["Content"].(map[string]any)
 	if !ok {
-		return false, fmt.Errorf("%s.Desktop has no Content dictionary", key)
+		content = map[string]any{"Shuffle": "$null"}
+		desktop["Content"] = content
+	}
+	if _, ok := content["EncodedOptionValues"].([]byte); !ok && len(options) > 0 {
+		content["EncodedOptionValues"] = options
 	}
 
 	choice := map[string]any{
@@ -182,8 +270,7 @@ func applyImage(root map[string]any, key string, config []byte) (bool, error) {
 	}
 
 	// Replace the first choice in place so any sibling keys the running
-	// macOS version added, and the user's placement and fill colour in
-	// EncodedOptionValues, are preserved.
+	// macOS version added are preserved.
 	if choices, ok := content["Choices"].([]any); ok && len(choices) > 0 {
 		if existing, ok := choices[0].(map[string]any); ok {
 			for k, v := range choice {
@@ -199,7 +286,7 @@ func applyImage(root map[string]any, key string, config []byte) (bool, error) {
 
 	desktop["LastSet"] = time.Now()
 	desktop["LastUse"] = time.Now()
-	return true, nil
+	return nil
 }
 
 // backupOnce keeps the first store this tool ever saw, so there is always a

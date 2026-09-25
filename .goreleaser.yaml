@@ -23,7 +23,9 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
-  - formats: [tar.gz]
+  - id: wallhaven-cli
+    ids: [wallhaven-cli]
+    formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     files:
@@ -42,14 +44,30 @@ changelog:
       - "^test:"
       - "^chore:"
 
-brews:
+homebrew_casks:
   - name: wallhaven-cli
+    binaries: [wallhaven-cli]
+    ids: [wallhaven-cli]
+    directory: Casks
+    homepage: https://github.com/konsoli/wallhaven-cli
+    description: Fetch a wallpaper from wallhaven.cc and set it as your desktop wallpaper
     repository:
       owner: konsoli
       name: homebrew-tap
+      branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: https://github.com/konsoli/wallhaven-cli
-    description: Fetch a wallpaper from wallhaven.cc and set it as your desktop wallpaper
-    license: GPL-2.0-only
-    test: |
-      assert_match "wallhaven-cli", shell_output("#{bin}/wallhaven-cli --version")
+    commit_msg_template: "wallhaven-cli {{ .Tag }}"
+    hooks:
+      post:
+        # The release binaries are not signed or notarized, so Gatekeeper
+        # would otherwise quarantine them on first run.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/wallhaven-cli"]
+          end
+    caveats: |
+      Run `wallhaven-cli` with no arguments for the full help.
+
+      An nsfw purity (--purity 111 and friends) needs a wallhaven API key:
+        export WALLHAVEN_API_KEY=...

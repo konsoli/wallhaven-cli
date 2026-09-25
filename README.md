@@ -136,7 +136,13 @@ it on macOS 27, so before every write `wallhaven-cli` checks that it can
 decode and re-encode the file without losing anything, and backs the original
 up to `Index.plist.wallhaven-cli.bak` the first time it runs. If the file ever
 stops looking familiar, the tool falls back to AppleScript, which only reaches
-the current Space of each display, and says so. To undo everything:
+the current Space of each display, and says so.
+
+Setting the wallpaper the AppleScript way — which is what most scripts and
+older tools do — makes macOS fill the store with per-Space entries and strip
+the all-spaces desktop entry entirely. `wallhaven-cli` rebuilds that entry and
+clears the overrides, so running it once is enough to undo the damage. To undo
+everything instead:
 
 ```
 cp ~/Library/Application\ Support/com.apple.wallpaper/Store/Index.plist.wallhaven-cli.bak \
