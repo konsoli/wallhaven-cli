@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (c) 2026 Paul Merisalu
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: gofmt -l . | tee /dev/stderr | (! read)
+      - run: go vet ./...
+      - run: go test ./...
+
+  cross-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      # The wallpaper backends are per-platform, so both have to keep building.
+      - run: GOOS=darwin GOARCH=arm64 go build ./...
+      - run: GOOS=darwin GOARCH=amd64 go build ./...
+      - run: GOOS=linux GOARCH=arm64 go build ./...
+      - run: GOOS=linux GOARCH=amd64 go build ./...

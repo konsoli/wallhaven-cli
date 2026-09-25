@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (c) 2026 Paul Merisalu
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: wallhaven-cli
+    binary: wallhaven-cli
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - COPYING
+      - LICENSES/**/*
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - name: wallhaven-cli
+    repository:
+      owner: konsoli
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/konsoli/wallhaven-cli
+    description: Fetch a wallpaper from wallhaven.cc and set it as your desktop wallpaper
+    license: GPL-2.0-only
+    test: |
+      assert_match "wallhaven-cli", shell_output("#{bin}/wallhaven-cli --version")
