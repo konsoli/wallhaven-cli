@@ -18,7 +18,9 @@ macOS wallpaper store
 
 ## Install
 
-Homebrew:
+git clone and build.
+
+Homebrew: (NOT YET SUPPORTED)
 
 ```
 brew install konsoli/tap/wallhaven-cli
@@ -27,10 +29,10 @@ brew install konsoli/tap/wallhaven-cli
 From source:
 
 ```
-go install github.com/konsoli/wallhaven-cli@latest
+go install github.com/konsoli/wallhaven-cli@latest (NOT YET SUPPORTED)
 ```
 
-Or download a binary from the [releases page](https://github.com/konsoli/wallhaven-cli/releases).
+Or download a binary from the [releases page](https://github.com/konsoli/wallhaven-cli/releases). (NOT YET SUPPORTED)
 
 ## Usage
 
