@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (c) 2026 Paul Merisalu
 
-// Command wallhaven-cli fetches a wallpaper from wallhaven.cc and sets it as
-// the desktop wallpaper.
+// Command wallhaven-cli downloads a wallpaper from wallhaven.cc and, with
+// --try-set, applies it as the desktop wallpaper.
 //
 // wallhaven-cli is not affiliated with wallhaven.cc.
 // All images remain the property of their original owners.
@@ -32,7 +32,7 @@ var (
 	date    = "unknown"
 )
 
-const usage = `wallhaven-cli ` + "—" + ` fetch a wallpaper from wallhaven.cc and set it as your desktop wallpaper
+const usage = `wallhaven-cli ` + "—" + ` download a wallpaper from wallhaven.cc, optionally set it as your desktop wallpaper
 
 USAGE
   wallhaven-cli <source> [filters] [output]
@@ -64,9 +64,10 @@ FILTERS
 
 OUTPUT
   --dir <PATH>          where to save, default: current directory
-  --dl-only             download only, do not set the wallpaper
+  --fork                write the image to stdout, keep no file
 
 OTHER
+  --try-set             also set the wallpaper, when this session supports it
   --api-key <KEY>       overrides WALLHAVEN_API_KEY
   --quiet               only print the saved file path
   --version
@@ -82,7 +83,8 @@ EXAMPLES
   wallhaven-cli --user helminuri               uploads by helminuri
   wallhaven-cli --search "yosemite sunset"
   wallhaven-cli --search "anime woman" --purity 111
-  wallhaven-cli --random --dl-only
+  wallhaven-cli --random --try-set
+  wallhaven-cli --random --fork | magick - -resize 50% small.jpg
   wallhaven-cli --random --dir "~/Downloads/walls"
   wallhaven-cli --toplist --purity 110 --dir ~/Pictures/walls
 
@@ -131,7 +133,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		search  = fs.String("search", "", "")
 		purity  = fs.String("purity", wallhaven.PurityDefault, "")
 		dir     = fs.String("dir", "", "")
-		dlOnly  = fs.Bool("dl-only", false, "")
+		fork    = fs.Bool("fork", false, "")
+		trySet  = fs.Bool("try-set", false, "")
 		apiKey  = fs.String("api-key", "", "")
 		quiet   = fs.Bool("quiet", false, "")
 		showVer = fs.Bool("version", false, "")
@@ -166,6 +169,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	// Checked before the first request, so a command line that cannot mean
+	// anything never costs an API call. --fork --quiet is left alone: both
+	// ask for silence, so together they are a no-op rather than a mistake.
+	if *fork {
+		if *trySet {
+			return usagef("--fork keeps no file, so there is nothing for --try-set to apply")
+		}
+		if *dir != "" {
+			return usagef("--fork writes the image to stdout; --dir has nothing to save")
+		}
+	}
+
 	key := *apiKey
 	if key == "" {
 		key = os.Getenv("WALLHAVEN_API_KEY")
@@ -198,14 +213,23 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	// Search results carry no uploader, so fill it in from /w/<id>. A
-	// failure here is cosmetic; the download is still worth doing.
-	if w.UploaderName() == "" {
+	// failure here is cosmetic; the download is still worth doing. --fork
+	// reports nothing, so it can skip the request entirely.
+	if !*fork && w.UploaderName() == "" {
 		if full, ferr := client.ByID(w.ID); ferr == nil {
 			w = full
 		}
 	}
 
-	res, err := download.Fetch(&http.Client{Timeout: 5 * time.Minute},
+	httpClient := &http.Client{Timeout: 5 * time.Minute}
+
+	// A pipeline wants the image and nothing else, so --fork prints no
+	// report: stdout is the file, and only errors reach stderr.
+	if *fork {
+		return download.Stream(httpClient, w.Path, client.UserAgent(), stdout, w.FileSize)
+	}
+
+	res, err := download.Fetch(httpClient,
 		w.Path, client.UserAgent(), *dir, w.FileSize)
 	if err != nil {
 		return err
@@ -217,12 +241,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 		printWallpaper(stdout, w, res, note)
 	}
 
-	if *dlOnly {
+	if !*trySet {
 		return nil
 	}
 
 	set, err := wallpaper.Set(res.Path)
-	if err != nil {
+	switch {
+	case errors.Is(err, wallpaper.ErrUnsupported):
+		// The download is the job; applying it is best effort. A session
+		// with no wallpaper mechanism is not a failed run, so say what
+		// happened on stderr and leave the exit status alone.
+		fmt.Fprintf(stderr, "wallpaper not set: %v\n", err)
+		return nil
+	case err != nil:
 		return fmt.Errorf("the wallpaper was saved to %s but could not be applied: %w", res.Path, err)
 	}
 	if !*quiet {

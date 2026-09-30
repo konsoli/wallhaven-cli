@@ -4,14 +4,22 @@
 package wallpaper
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
 
 // envFunc builds a getenv stand-in from a map, so detection can be exercised
-// without a real session.
+// without a real session. Every case is a live graphical session unless it
+// names a display variable of its own, so DISPLAY is filled in by default
+// and each table stays about the desktop it is testing.
 func envFunc(m map[string]string) func(string) string {
-	return func(k string) string { return m[k] }
+	return func(k string) string {
+		if k == "DISPLAY" && m["DISPLAY"] == "" && m["WAYLAND_DISPLAY"] == "" {
+			return ":0"
+		}
+		return m[k]
+	}
 }
 
 func hasAll(string) bool  { return true }
@@ -150,8 +158,31 @@ func TestDetectFailsWithNothingInstalled(t *testing.T) {
 	if err == nil {
 		t.Fatal("detect() = nil error with no desktop and no setter, want an error")
 	}
-	if !strings.Contains(err.Error(), "--dl-only") {
-		t.Errorf("error should point at --dl-only, got: %v", err)
+	if !errors.Is(err, ErrUnsupported) {
+		t.Errorf("error = %v, want it to wrap ErrUnsupported", err)
+	}
+	for _, setter := range []string{"feh", "xwallpaper", "nitrogen"} {
+		if !strings.Contains(err.Error(), setter) {
+			t.Errorf("error should name %s as an option, got: %v", setter, err)
+		}
+	}
+}
+
+// An ssh or cron environment can still carry XDG_CURRENT_DESKTOP from a
+// login shell, so the display check has to come before desktop detection.
+func TestDetectFailsWithoutADisplay(t *testing.T) {
+	headless := func(k string) string {
+		if k == "XDG_CURRENT_DESKTOP" {
+			return "GNOME"
+		}
+		return ""
+	}
+	_, err := detect(wall, headless, hasAll)
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("detect() error = %v, want it to wrap ErrUnsupported", err)
+	}
+	if !strings.Contains(err.Error(), "DISPLAY") {
+		t.Errorf("error should name the missing variables, got: %v", err)
 	}
 }
 

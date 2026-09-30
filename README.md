@@ -1,10 +1,11 @@
 # wallhaven-cli
 
-Fetch a wallpaper from [wallhaven.cc](https://wallhaven.cc) and set it as your
-desktop wallpaper. macOS and Linux, one binary, no runtime dependencies.
+Download a wallpaper from [wallhaven.cc](https://wallhaven.cc), and with
+`--try-set` apply it as your desktop wallpaper. macOS and Linux, one binary,
+no runtime dependencies.
 
 ```
-$ wallhaven-cli --toplist --dir ~/Pictures/walls
+$ wallhaven-cli --toplist --dir ~/Pictures/walls --try-set
 Saved     /Users/pme/Pictures/walls/wallhaven-vp2q78.jpg
 Uploader  AndorSwallow
 Category  anime
@@ -16,9 +17,83 @@ macOS wallpaper store
   lock screen follows the desktop picture on macOS
 ```
 
-## Install
+## Build
 
-git clone and build.
+Go 1.23 or newer is the only requirement. There is one dependency,
+[howett.net/plist](https://howett.net/plist), and `go build` fetches it.
+No CGO, no code generation, no build tooling.
+
+```
+git clone https://github.com/konsoli/wallhaven-cli
+cd wallhaven-cli
+go build
+./wallhaven-cli --toplist
+```
+
+To put it on your `PATH`, either `go install .`, which lands the binary in
+`$(go env GOPATH)/bin` (`~/go/bin` unless you moved it), or copy the one you
+just built:
+
+```
+sudo cp wallhaven-cli /usr/local/bin/
+```
+
+### Version stamping
+
+`--version` reports `dev` after a plain `go build`. The version, commit and
+date are linker-stamped at release time; to do the same by hand:
+
+```
+go build -ldflags "-s -w \
+  -X main.version=$(git describe --tags --always) \
+  -X main.commit=$(git rev-parse --short HEAD) \
+  -X main.date=$(git log -1 --format=%cI)"
+```
+
+With no tag in the repository yet, `git describe` falls back to the commit
+hash.
+
+### Cross-compiling
+
+Pure Go, so a build for another platform is just the two variables:
+
+```
+GOOS=linux  GOARCH=amd64 go build -o wallhaven-cli-linux-amd64
+GOOS=darwin GOARCH=arm64 go build -o wallhaven-cli-darwin-arm64
+```
+
+Releases cover darwin and linux on amd64 and arm64 with `CGO_ENABLED=0`. The
+wallpaper backends are per platform and compiled by build tag, so a change to
+one of them is worth cross-building before committing.
+
+### Checks
+
+The three commands CI runs, in order:
+
+```
+gofmt -l .
+go vet ./...
+go test ./...
+```
+
+`gofmt -l .` must print nothing. The tests need no network, no API key and no
+desktop session: the HTTP paths run against `httptest` servers and the
+wallpaper backends are exercised through a fake environment.
+
+### Releases
+
+Pushing a `v*` tag runs [.goreleaser.yaml](.goreleaser.yaml) through the
+release workflow: tarballs for the four platforms, `checksums.txt`, and a
+Homebrew cask in `konsoli/homebrew-tap`. To rehearse it locally without
+tagging or publishing anything:
+
+```
+goreleaser release --snapshot --clean
+```
+
+The result lands in `dist/`, which is git-ignored.
+
+## Install
 
 Homebrew: (NOT YET SUPPORTED)
 
@@ -33,6 +108,8 @@ go install github.com/konsoli/wallhaven-cli@latest (NOT YET SUPPORTED)
 ```
 
 Or download a binary from the [releases page](https://github.com/konsoli/wallhaven-cli/releases). (NOT YET SUPPORTED)
+
+Until those land, build it yourself as above.
 
 ## Usage
 
@@ -87,7 +164,8 @@ handing you a quietly filtered result.
 
 ```
 --dir <PATH>     where to save, default: the current directory
---dl-only        download only, do not set the wallpaper
+--fork           write the image to stdout, keep no file
+--try-set        also set the wallpaper, when this session supports it
 --quiet          print only the saved file path
 ```
 
@@ -96,6 +174,21 @@ even when the shell never sees the tilde unquoted.
 
 The file keeps its wallhaven name, `wallhaven-<id>.<ext>`. Re-fetching a
 wallpaper you already have skips the download.
+
+### Piping
+
+`--fork` makes the tool a filter: the image goes to stdout and nothing else
+does, so it can be handed straight to another program.
+
+```
+wallhaven-cli --random --fork | magick - -resize 50% small.jpg
+wallhaven-cli --toplist --fork > wall.jpg
+```
+
+Nothing is written to disk, so `--dir` and `--try-set` are refused rather
+than quietly ignored, and every run downloads again — there is no file left
+over to reuse. Only errors go to stderr; the usual report, uploader included,
+is not printed.
 
 ### Examples
 
@@ -109,15 +202,25 @@ wallhaven-cli --tag 2321
 wallhaven-cli --user helminuri
 wallhaven-cli --search "yosemite sunset"
 wallhaven-cli --search "anime woman" --purity 111
-wallhaven-cli --random --dl-only
+wallhaven-cli --random --try-set
+wallhaven-cli --random --fork | magick - -resize 50% small.jpg
 wallhaven-cli --random --dir "~/Downloads/walls"
 wallhaven-cli --toplist --purity 110 --dir ~/Pictures/walls
 ```
 
 Exit status is `0` on success, `2` for a bad command line, and `1` for
-anything else.
+anything else. `--try-set` is best effort: in a session with no wallpaper
+mechanism at all — an ssh or cron run, a Linux box with no desktop — the file
+is still saved, a line goes to stderr saying the wallpaper was not set, and
+the exit status stays `0`. A desktop that was detected but whose setter then
+failed is a real error and exits `1`.
 
-## How the wallpaper gets set
+## Setting the wallpaper
+
+Nothing below happens without `--try-set`. On Linux it also needs a graphical
+session: `DISPLAY` or `WAYLAND_DISPLAY` has to be set, because
+`XDG_CURRENT_DESKTOP` survives into ssh and cron environments where no setter
+could work.
 
 ### macOS
 
@@ -191,7 +294,9 @@ every desktop in the table. Reports welcome.
 - Every run prints the uploader, the category and the wallpaper's page URL.
   Wallhaven's [rules](https://wallhaven.cc/rules) ask that the author be
   attributed wherever possible, and those three fields are what make that
-  possible once the file is on your disk.
+  possible once the file is on your disk. The exception is `--fork`, where
+  stdout belongs to the image alone; run the same source without it to see
+  who made the wallpaper.
 
 `wallhaven-cli` is not affiliated with, endorsed by, or connected to
 wallhaven.cc. All images remain the property of their original owners.

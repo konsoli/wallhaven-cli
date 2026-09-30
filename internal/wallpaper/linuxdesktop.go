@@ -49,10 +49,19 @@ func lookPath(name string) bool {
 
 // detect picks a backend from the session environment.
 //
-// The Wayland compositors are checked first because they set
+// A graphical session is required first: without DISPLAY or WAYLAND_DISPLAY
+// there is no desktop to draw on, and a leftover XDG_CURRENT_DESKTOP in an
+// ssh or cron environment would otherwise send us off running setters that
+// can only fail.
+//
+// The Wayland compositors are checked next because they set
 // XDG_CURRENT_DESKTOP too, then the desktop environment, then whatever
 // standalone X11 setter is installed.
 func detect(absPath string, getenv func(string) string, has func(string) bool) (backend, error) {
+	if getenv("DISPLAY") == "" && getenv("WAYLAND_DISPLAY") == "" {
+		return backend{}, fmt.Errorf("%w: neither DISPLAY nor WAYLAND_DISPLAY is set", ErrUnsupported)
+	}
+
 	fileURI := (&url.URL{Scheme: "file", Path: absPath}).String()
 
 	if getenv("SWAYSOCK") != "" {
@@ -224,10 +233,8 @@ func x11Backend(absPath string, has func(string) bool) (backend, error) {
 			}, nil
 		}
 	}
-	return backend{}, errors.New(
-		"could not detect a supported desktop environment. " +
-			"Set XDG_CURRENT_DESKTOP, or install one of feh, xwallpaper or nitrogen, " +
-			"or use --dl-only and set the wallpaper yourself")
+	return backend{}, fmt.Errorf("%w: no desktop environment was detected and none of "+
+		"feh, xwallpaper or nitrogen is installed", ErrUnsupported)
 }
 
 func (b backend) run() (Result, error) {

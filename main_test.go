@@ -62,7 +62,7 @@ func TestHelpListsEverySource(t *testing.T) {
 	stdout, _, _ := runArgs(t, "--help")
 	for _, flag := range []string{
 		"--random", "--latest", "--toplist", "--hotlist",
-		"--id", "--tag", "--user", "--search", "--dl-only", "--dir",
+		"--id", "--tag", "--user", "--search", "--try-set", "--fork", "--dir",
 	} {
 		if !strings.Contains(stdout, flag) {
 			t.Errorf("help does not document %s", flag)
@@ -154,6 +154,34 @@ func TestSafePurityNeedsNoKey(t *testing.T) {
 		if err != nil || needsKey {
 			t.Errorf("purity %s: needsKey = %v, err = %v; want false, nil", bits, needsKey, err)
 		}
+	}
+}
+
+// --fork keeps no file, so the flags that need one cannot come with it.
+// Both cases have to be caught before any request is made.
+func TestForkRejectsFlagsThatNeedAFile(t *testing.T) {
+	tests := [][]string{
+		{"--random", "--fork", "--try-set"},
+		{"--random", "--fork", "--dir", "/tmp/walls"},
+	}
+	for _, args := range tests {
+		_, _, err := runArgs(t, args...)
+		if !isUsage(err) {
+			t.Errorf("run(%v) error = %v, want a usage error", args, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "--fork") {
+			t.Errorf("run(%v) error = %v, want it to explain --fork", args, err)
+		}
+	}
+}
+
+// Downloading is the default now, so the flag that used to ask for it is
+// gone rather than quietly accepted.
+func TestRemovedDlOnlyIsUsageError(t *testing.T) {
+	_, _, err := runArgs(t, "--random", "--dl-only")
+	if !isUsage(err) {
+		t.Fatalf("run() error = %v, want a usage error", err)
 	}
 }
 

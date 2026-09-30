@@ -12,5 +12,5 @@ import (
 
 // Set is not implemented on this platform.
 func Set(absPath string) (Result, error) {
-	return Result{}, fmt.Errorf("setting the wallpaper is not supported on %s; use --dl-only", runtime.GOOS)
+	return Result{}, fmt.Errorf("%w: %s has no supported wallpaper mechanism", ErrUnsupported, runtime.GOOS)
 }

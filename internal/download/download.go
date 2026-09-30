@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (c) 2026 Paul Merisalu
 
-// Package download saves a wallpaper file to disk.
+// Package download saves a wallpaper file to disk, or streams it to a writer.
 package download
 
 import (
@@ -69,23 +69,11 @@ func Fetch(client *http.Client, srcURL, userAgent, dir string, expectedSize int6
 		}
 	}
 
-	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Minute}
-	}
-	req, err := http.NewRequest(http.MethodGet, srcURL, nil)
+	resp, err := get(client, srcURL, userAgent)
 	if err != nil {
 		return Result{}, err
 	}
-	req.Header.Set("User-Agent", userAgent)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return Result{}, fmt.Errorf("downloading %s: %w", srcURL, err)
-	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return Result{}, fmt.Errorf("downloading %s: %s", srcURL, resp.Status)
-	}
 
 	tmp, err := os.CreateTemp(outDir, name+".*.part")
 	if err != nil {
@@ -112,4 +100,50 @@ func Fetch(client *http.Client, srcURL, userAgent, dir string, expectedSize int6
 		return Result{}, fmt.Errorf("saving to %s: %w", dest, err)
 	}
 	return Result{Path: dest}, nil
+}
+
+// Stream copies the wallpaper to dst without touching the disk, so the tool
+// can sit in a pipeline.
+//
+// Nothing is cached, so a repeated run downloads again, and a short download
+// can only be reported once the bytes have already left: the consumer may be
+// holding a truncated image, which is why that is an error and not a warning.
+// expectedSize may be 0 when unknown.
+func Stream(client *http.Client, srcURL, userAgent string, dst io.Writer, expectedSize int64) error {
+	resp, err := get(client, srcURL, userAgent)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	written, err := io.Copy(dst, resp.Body)
+	if err != nil {
+		return fmt.Errorf("writing %s to stdout: %w", srcURL, err)
+	}
+	if expectedSize > 0 && written != expectedSize {
+		return fmt.Errorf("incomplete download: wrote %d bytes, expected %d", written, expectedSize)
+	}
+	return nil
+}
+
+// get makes the download request. The caller closes the body.
+func get(client *http.Client, srcURL, userAgent string) (*http.Response, error) {
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Minute}
+	}
+	req, err := http.NewRequest(http.MethodGet, srcURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("downloading %s: %w", srcURL, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("downloading %s: %s", srcURL, resp.Status)
+	}
+	return resp, nil
 }
